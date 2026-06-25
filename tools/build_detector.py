@@ -8,7 +8,9 @@ import torch
 
 
 class HumanDetector:
-    def __init__(self, name="vitdet", device="cuda", **kwargs):
+    def __init__(self, name="vitdet", device=None, **kwargs):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         self.name = name
 
@@ -112,7 +114,9 @@ def run_detectron2_vitdet(
     return boxes
 
 
-def load_yolo11(model_name="yolo11n.pt", device="cuda", task=None):
+def load_yolo11(model_name="yolo11n.pt", device=None, task=None):
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     """
     Load YOLO11 model from ultralytics.
 

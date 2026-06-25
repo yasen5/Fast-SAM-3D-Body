@@ -89,7 +89,9 @@ class TRTEncoderWrapper:
 
 
 class FOVEstimator:
-    def __init__(self, name="moge2", device="cuda", **kwargs):
+    def __init__(self, name="moge2", device=None, **kwargs):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
         self.fixed_size = FOV_SIZE
         self.resolution_level = int(FOV_LEVEL) if FOV_LEVEL else 9  # default 9

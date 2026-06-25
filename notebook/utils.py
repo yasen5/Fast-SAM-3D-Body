@@ -27,7 +27,7 @@ def setup_sam_3d_body(
     detector_path: str = "",
     segmentor_path: str = "",
     fov_path: str = "",
-    device: str = "cuda",
+    device: str | None = None,
     detector_model: str = "",
     local_checkpoint_path: str = "",  # Local checkpoint path (containing model.ckpt and model_config.yaml)
     local_mhr_path: str = "",  # Local MHR model path

@@ -7,8 +7,10 @@ from .utils.config import get_config
 from .utils.checkpoint import load_state_dict
 
 
-def load_sam_3d_body(checkpoint_path: str = "", device: str = "cuda", mhr_path: str = ""):
+def load_sam_3d_body(checkpoint_path: str = "", device: str | None = None, mhr_path: str = ""):
     print("Loading SAM 3D Body model...")
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Check the current directory, and if not present check the parent dir.
     model_cfg = os.path.join(os.path.dirname(checkpoint_path), "model_config.yaml")
@@ -41,6 +43,7 @@ def load_sam_3d_body(checkpoint_path: str = "", device: str = "cuda", mhr_path: 
         state_dict = checkpoint["state_dict"]
     else:
         state_dict = checkpoint
+    state_dict = _normalize_state_dict_keys(state_dict)
     load_state_dict(model, state_dict, strict=False)
 
     model = model.to(device)
@@ -70,6 +73,20 @@ def load_sam_3d_body(checkpoint_path: str = "", device: str = "cuda", mhr_path: 
     return model, model_cfg
 
 
+def _normalize_state_dict_keys(state_dict):
+    renamed = {
+        ".scale_cocpu": ".scale_comps",
+        ".hand_pose_cocpu": ".hand_pose_comps",
+    }
+    normalized = {}
+    for key, value in state_dict.items():
+        new_key = key
+        for old, new in renamed.items():
+            new_key = new_key.replace(old, new)
+        normalized[new_key] = value
+    return normalized
+
+
 def _hf_download(repo_id):
     from huggingface_hub import snapshot_download
     local_dir = snapshot_download(repo_id=repo_id)
@@ -78,4 +95,4 @@ def _hf_download(repo_id):
 
 def load_sam_3d_body_hf(repo_id, **kwargs):
     ckpt_path, mhr_path = _hf_download(repo_id)
-    return load_sam_3d_body(checkpoint_path=ckpt_path, mhr_path=mhr_path)
+    return load_sam_3d_body(checkpoint_path=ckpt_path, mhr_path=mhr_path, **kwargs)
