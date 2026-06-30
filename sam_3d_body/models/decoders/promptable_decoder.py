@@ -22,6 +22,11 @@ _INTERM_TIMING_WARMUP = 3
 _INTERM_TIMING_CALL_COUNT = 0
 
 
+def _cuda_synchronize():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
 class PromptableDecoder(nn.Module):
     """Cross-attention based Transformer decoder with prompts input."""
 
@@ -261,7 +266,7 @@ class PromptableDecoder(nn.Module):
                         _INTERM_TIMING_CALL_COUNT += 1
                         do_interm_timing = _INTERM_TIMING_CALL_COUNT > _INTERM_TIMING_WARMUP
                         if do_interm_timing:
-                            torch.cuda.synchronize()
+                            _cuda_synchronize()
                             t_interm_start = _time.perf_counter()
 
                     curr_pose_output = token_to_pose_output_fn(
@@ -275,7 +280,7 @@ class PromptableDecoder(nn.Module):
                     last_pose_output = curr_pose_output  # Save for reuse
 
                     if do_interm_timing:
-                        torch.cuda.synchronize()
+                        _cuda_synchronize()
                         t_interm_end = _time.perf_counter()
                         print(f"[IntermPred] {decoder_name} layer={layer_idx}: {(t_interm_end - t_interm_start)*1000:.2f}ms")
 
@@ -306,7 +311,7 @@ class PromptableDecoder(nn.Module):
                 _INTERM_TIMING_CALL_COUNT += 1
                 do_final_timing = _INTERM_TIMING_CALL_COUNT > _INTERM_TIMING_WARMUP
                 if do_final_timing:
-                    torch.cuda.synchronize()
+                    _cuda_synchronize()
                     t_final_start = _time.perf_counter()
 
             curr_pose_output = token_to_pose_output_fn(
@@ -319,7 +324,7 @@ class PromptableDecoder(nn.Module):
             all_pose_outputs.append(curr_pose_output)
 
             if do_final_timing:
-                torch.cuda.synchronize()
+                _cuda_synchronize()
                 t_final_end = _time.perf_counter()
                 print(f"[IntermPred] {decoder_name} FINAL: {(t_final_end - t_final_start)*1000:.2f}ms")
 

@@ -2,10 +2,13 @@
 
 import torch
 import numpy as np
+from contextlib import nullcontext
 
 
 class HumanSegmentor:
-    def __init__(self, name="sam2", device="cuda", **kwargs):
+    def __init__(self, name="sam2", device=None, **kwargs):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
 
         if name == "sam2":
@@ -36,7 +39,13 @@ def load_sam2(device, path):
 
 
 def run_sam2(sam_predictor, img, boxes):
-    with torch.autocast("cuda", dtype=torch.bfloat16):
+    device_type = next(sam_predictor.model.parameters()).device.type
+    autocast_ctx = (
+        torch.autocast(device_type, dtype=torch.bfloat16)
+        if device_type in {"cpu", "cuda"}
+        else nullcontext()
+    )
+    with autocast_ctx:
         sam_predictor.set_image(img)
         all_masks, all_scores = [], []
         for i in range(boxes.shape[0]):
@@ -62,4 +71,3 @@ def run_sam2(sam_predictor, img, boxes):
         all_scores = np.stack(all_scores)
     
     return all_masks, all_scores
-        

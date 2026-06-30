@@ -20,6 +20,11 @@ from sam_3d_body.utils import recursive_to
 from torchvision.transforms import ToTensor
 
 
+def _cuda_synchronize():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
 class SAM3DBodyEstimator:
     def __init__(
         self,
@@ -93,7 +98,7 @@ class SAM3DBodyEstimator:
         # If body head failed, clean up state and skip hand head
         if cuda_graph_failed:
             try:
-                torch.cuda.synchronize()
+                _cuda_synchronize()
             except:
                 pass
             # Disable CUDA Graph for hand head
@@ -111,7 +116,7 @@ class SAM3DBodyEstimator:
             print(f"[SAM3DBodyEstimator] Hand head CUDA Graph warmup failed: {e}")
 
         try:
-            torch.cuda.synchronize()
+            _cuda_synchronize()
         except Exception as e:
             print(f"[SAM3DBodyEstimator] CUDA synchronize failed: {e}")
 
@@ -180,7 +185,7 @@ class SAM3DBodyEstimator:
                         hand_batch_idx=hand_batch_idx
                     )
 
-                torch.cuda.synchronize()
+                _cuda_synchronize()
                 print(f"[SAM3DBodyEstimator] Warmup for batch_size={batch_size} completed")
 
             except Exception as e:
@@ -232,7 +237,8 @@ class SAM3DBodyEstimator:
         self.output = None
         self.prev_prompt = []
         try:
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         except RuntimeError as e:
             # If state is corrupted after CUDA Graph capture failure, skip empty_cache
             print(f"        [process_one_image] Warning: empty_cache failed: {e}")
@@ -258,7 +264,7 @@ class SAM3DBodyEstimator:
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 image_format = "bgr"
             print("Running object detector...")
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             detection_result = self.detector.run_human_detection(
                 img,
                 det_cat_id=det_cat_id,
@@ -266,7 +272,7 @@ class SAM3DBodyEstimator:
                 nms_thr=nms_thr,
                 default_to_full_image=False,
             )
-            torch.cuda.synchronize()
+            _cuda_synchronize()
 
             # Handle yolo_pose detector which returns dict with boxes and keypoints
             if isinstance(detection_result, dict):
@@ -311,9 +317,9 @@ class SAM3DBodyEstimator:
         elif use_mask and self.sam is not None:
             print("Running SAM to get mask from bbox...")
             # Generate masks using SAM2
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             masks, masks_score = self.sam.run_sam(img, boxes)
-            torch.cuda.synchronize()
+            _cuda_synchronize()
         else:
             masks, masks_score = None, None
         print(f"        [process_one_image] mask_processing: {time.time() - t0:.4f}s")
@@ -325,7 +331,7 @@ class SAM3DBodyEstimator:
 
         #################### Run model inference on an image ####################
         t0 = time.time()
-        batch = recursive_to(batch, "cuda")
+        batch = recursive_to(batch, self.device)
         self.model._initialize_batch(batch)
         print(f"        [process_one_image] initialize_batch: {time.time() - t0:.4f}s")
 
@@ -339,18 +345,18 @@ class SAM3DBodyEstimator:
         elif self.fov_estimator is not None:
             print("Running FOV estimator ...")
             input_image = batch["img_ori"][0].data
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             cam_int = self.fov_estimator.get_cam_intrinsics(input_image).to(
                 batch["img"]
             )
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             batch["cam_int"] = cam_int.clone()
         else:
             cam_int = batch["cam_int"].clone()
         print(f"        [process_one_image] fov_estimation: {time.time() - t0:.4f}s")
 
         t0 = time.time()
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         outputs = self.model.run_inference(
             img,
             batch,
@@ -361,7 +367,7 @@ class SAM3DBodyEstimator:
             yolo_pose_keypoints=yolo_pose_keypoints,
             yolo_pose_body_boxes=yolo_pose_body_boxes,
         )
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         print(f"        [process_one_image] model_run_inference: {time.time() - t0:.4f}s")
         if inference_type == "full":
             pose_output, batch_lhand, batch_rhand, _, _ = outputs

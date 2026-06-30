@@ -40,9 +40,13 @@ _INTERM_TIMING_COUNT = [0]  # Use list to simulate mutable reference
 
 def _sync_time():
     """Synchronize CUDA and return current time."""
+    _cuda_synchronize()
+    return time.perf_counter()
+
+
+def _cuda_synchronize():
     if torch.cuda.is_available():
         torch.cuda.synchronize()
-    return time.perf_counter()
 
 
 # ============================================================
@@ -2264,10 +2268,14 @@ class SAM3DBody(BaseModel):
         B, N, _, H, W = batch["img"].shape
         meshgrid_xy = (
             torch.stack(
-                torch.meshgrid(torch.arange(H), torch.arange(W), indexing="xy"), dim=2
+                torch.meshgrid(
+                    torch.arange(H, device=batch["img"].device),
+                    torch.arange(W, device=batch["img"].device),
+                    indexing="xy",
+                ),
+                dim=2,
             )[None, None, :, :, :]
             .repeat(B, N, 1, 1, 1)
-            .cuda()
         )  # B x N x H x W x 2
         meshgrid_xy = (
             meshgrid_xy / batch["affine_trans"][:, :, None, None, [0, 1], [0, 1]]
@@ -2356,7 +2364,7 @@ class SAM3DBody(BaseModel):
         print(f"          [forward_pose_branch] ray_condition: {time.time() - t0:.4f}s")
 
         t0 = time.time()
-        torch.cuda.synchronize()
+        _cuda_synchronize()
 
         print(f"          [DEBUG] FOV input image size: {x.shape[2]}x{x.shape[3]} (H x W)")
         print(f"          [DEBUG] Model: SAM3DBody-Backbone ({self.cfg.MODEL.BACKBONE.TYPE}), input_dtype: {x.dtype}, compute_dtype: {self.backbone_dtype}")
@@ -2364,7 +2372,7 @@ class SAM3DBody(BaseModel):
         image_embeddings = self.backbone(
             x.type(self.backbone_dtype), extra_embed=ray_cond
         )  # (B, C, H, W)
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         print(f"          [forward_pose_branch] backbone: {time.time() - t0:.4f}s")
 
         if isinstance(image_embeddings, tuple):
@@ -2407,7 +2415,7 @@ class SAM3DBody(BaseModel):
             # COMBINED DECODER EXECUTION - both body and hand in one call
             # ============================================================
             t0 = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
 
             # Run combined forward (can be torch.compiled for optimization)
             tokens_output, pose_output, tokens_output_hand, pose_output_hand = \
@@ -2421,7 +2429,7 @@ class SAM3DBody(BaseModel):
                     batch,
                 )
 
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [forward_pose_branch] forward_decoders_combined (body+hand): {time.time() - t0:.4f}s")
 
             # Handle list outputs
@@ -2433,7 +2441,7 @@ class SAM3DBody(BaseModel):
         elif need_body:
             # Only body decoder needed
             t0 = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             # Mark step begin to avoid CUDA graph tensor reuse conflicts
             torch.compiler.cudagraph_mark_step_begin()
             tokens_output, pose_output = self.forward_decoder(
@@ -2444,7 +2452,7 @@ class SAM3DBody(BaseModel):
                 condition_info=condition_info[self.body_batch_idx],
                 batch=batch,
             )
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [forward_pose_branch] forward_decoder_body: {time.time() - t0:.4f}s")
             # When DO_INTERM_PREDS=True, pose_output is a list, take the last one
             # When DO_INTERM_PREDS=False, pose_output is already a dict
@@ -2454,7 +2462,7 @@ class SAM3DBody(BaseModel):
         elif need_hand:
             # Only hand decoder needed
             t0 = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             # Mark step begin to avoid CUDA graph tensor reuse conflicts
             torch.compiler.cudagraph_mark_step_begin()
             tokens_output_hand, pose_output_hand = self.forward_decoder_hand(
@@ -2465,7 +2473,7 @@ class SAM3DBody(BaseModel):
                 condition_info=condition_info[self.hand_batch_idx],
                 batch=batch,
             )
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [forward_pose_branch] forward_decoder_hand: {time.time() - t0:.4f}s")
             # When DO_INTERM_PREDS=True, pose_output_hand is a list, take the last one
             # When DO_INTERM_PREDS=False, pose_output_hand is already a dict
@@ -2594,17 +2602,17 @@ class SAM3DBody(BaseModel):
 
         if inference_type == "body":
             t0 = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             pose_output = self.forward_step(batch, decoder_type="body")
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [run_inference] forward_step_body: {time.time() - t0:.4f}s")
             print(f"        [run_inference] TOTAL: {time.time() - run_inference_start:.4f}s")
             return pose_output
         elif inference_type == "hand":
             t0 = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             pose_output = self.forward_step(batch, decoder_type="hand")
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [run_inference] forward_step_hand: {time.time() - t0:.4f}s")
             print(f"        [run_inference] TOTAL: {time.time() - run_inference_start:.4f}s")
             return pose_output
@@ -2645,7 +2653,7 @@ class SAM3DBody(BaseModel):
                     img, left_xyxy, right_xyxy, cam_int,
                     output_size=output_size,
                     padding=0.9,  # Consistent with GetBBoxCenterScale(padding=0.9)
-                    device='cuda'
+                    device=self.device
                 )
             else:
                 # CPU version (fallback)
@@ -2658,12 +2666,12 @@ class SAM3DBody(BaseModel):
                 batch_lhand = prepare_batch(
                     flipped_img, transform_hand, left_xyxy_flipped, cam_int=cam_int.clone()
                 )
-                batch_lhand = recursive_to(batch_lhand, "cuda")
+                batch_lhand = recursive_to(batch_lhand, self.device)
 
                 batch_rhand = prepare_batch(
                     img, transform_hand, right_xyxy, cam_int=cam_int.clone()
                 )
-                batch_rhand = recursive_to(batch_rhand, "cuda")
+                batch_rhand = recursive_to(batch_rhand, self.device)
 
             # Debug: save cropped images for comparison
             if _DEBUG_HAND_PREP:
@@ -2711,13 +2719,13 @@ class SAM3DBody(BaseModel):
             # body_batch_idx routes body crops to body decoder
             # hand_batch_idx routes hand crops to hand decoder
             t_merged = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             combined_output = self.forward_step_merged(
                 combined_batch,
                 body_batch_idx=list(range(num_persons)),
                 hand_batch_idx=list(range(num_persons, 3 * num_persons))
             )
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [run_inference] merged_forward (backbone + body_decoder + hand_decoder): {time.time() - t_merged:.4f}s")
 
             # Extract body output from combined output (include image_embeddings and condition_info for post-processing)
@@ -2773,9 +2781,9 @@ class SAM3DBody(BaseModel):
             # ============================================================
             # Step 1. For full-body inference, we first inference with the body decoder.
             t0 = time.time()
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             pose_output = self.forward_step(batch, decoder_type="body")
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [run_inference] step1_body_decoder: {time.time() - t0:.4f}s")
 
             # Get hand boxes - either from body decoder or YOLO-Pose
@@ -2807,20 +2815,20 @@ class SAM3DBody(BaseModel):
             batch_lhand = prepare_batch(
                 flipped_img, transform_hand, left_xyxy, cam_int=cam_int.clone()
             )
-            batch_lhand = recursive_to(batch_lhand, "cuda")
+            batch_lhand = recursive_to(batch_lhand, self.device)
 
             ## Prepare right hand batch
             batch_rhand = prepare_batch(
                 img, transform_hand, right_xyxy, cam_int=cam_int.clone()
             )
-            batch_rhand = recursive_to(batch_rhand, "cuda")
+            batch_rhand = recursive_to(batch_rhand, self.device)
 
             ## Merge both hand batches and run single forward pass
             batch_hands = self._merge_hand_batches(batch_lhand, batch_rhand)
             self._initialize_batch(batch_hands)  # Re-initialize for merged batch [1, 2, ...]
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             merged_output = self.forward_step(batch_hands, decoder_type="hand")
-            torch.cuda.synchronize()
+            _cuda_synchronize()
             print(f"          [run_inference] step2_hands_merged_decoder: {time.time() - t0:.4f}s")
 
         ## Split output back to left and right
@@ -2869,7 +2877,7 @@ class SAM3DBody(BaseModel):
         self._initialize_batch(batch)
 
         # Synchronize first to ensure all previous operations are complete
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         t0 = time.time()
         _ik_timing = {}
         _ik_detail = {}  # Finer-grained timing
@@ -2879,8 +2887,12 @@ class SAM3DBody(BaseModel):
         ### Get lowarm
         # Optimization: use pre-cached indices (avoid creating new tensors each time)
         if not hasattr(self, '_lowarm_joint_idxs'):
-            self._lowarm_joint_idxs = torch.LongTensor([76, 40]).cuda()
-            self._wrist_twist_joint_idxs = torch.LongTensor([77, 41]).cuda()
+            self._lowarm_joint_idxs = torch.tensor(
+                [76, 40], dtype=torch.long, device=joint_rotations.device
+            )
+            self._wrist_twist_joint_idxs = torch.tensor(
+                [77, 41], dtype=torch.long, device=joint_rotations.device
+            )
         lowarm_joint_idxs = self._lowarm_joint_idxs
         lowarm_joint_rotations = joint_rotations[:, lowarm_joint_idxs]  # B x 2 x 3 x 3
         ### Get zero-wrist pose
@@ -3055,7 +3067,7 @@ class SAM3DBody(BaseModel):
                 keypoint_prompt[:, :, :2] + 0.5, min=0.0, max=1.0
             )  # [-0.5, 0.5] --> [0, 1]
 
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_detail['criteria_prep'] = (time.time() - t0) * 1000
 
         t_kp = time.time()
@@ -3065,7 +3077,7 @@ class SAM3DBody(BaseModel):
             pose_output, _ = self.run_keypoint_prompt(
                 batch, pose_output, keypoint_prompt
             )
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_detail['run_keypoint_prompt'] = (time.time() - t_kp) * 1000
 
         ##############################################################################
@@ -3094,7 +3106,7 @@ class SAM3DBody(BaseModel):
             + rhand_output["mhr_hand"]["shape"][:, 40:]
         ) / 2
 
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_detail['drop_in_hand'] = (time.time() - t_drop) * 1000
 
         ############################ Doing IK ############################
@@ -3111,7 +3123,7 @@ class SAM3DBody(BaseModel):
             expr_params=pose_output["mhr"]["face"],
             return_joint_rotations=True,
         )[1]
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_detail['mhr_fk'] = (time.time() - t_fk) * 1000
 
         t_ik_calc = time.time()
@@ -3200,7 +3212,7 @@ class SAM3DBody(BaseModel):
             / (valid_angle.squeeze(-1).sum(dim=1, keepdim=True) + 1e-8),
             pose_output["mhr"]["shape"][:, 40:],
         )
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_detail['ik_calc'] = (time.time() - t_ik_calc) * 1000
 
         ########################################################
@@ -3252,7 +3264,7 @@ class SAM3DBody(BaseModel):
                 ...
             ] = 0  # pred_pose_raw is not valid anymore
             pose_output["mhr"]["mhr_model_params"] = mhr_model_params
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_timing['mhr_rerun'] = (time.time() - t_mhr) * 1000
 
         ########################################################
@@ -3276,7 +3288,7 @@ class SAM3DBody(BaseModel):
             pred_keypoints_3d_proj[:, :, :2] / pred_keypoints_3d_proj[:, :, [2]]
         )
         pose_output["mhr"]["pred_keypoints_2d"] = pred_keypoints_3d_proj[:, :, :2]
-        torch.cuda.synchronize()
+        _cuda_synchronize()
         _ik_timing['projection'] = (time.time() - t_proj) * 1000
 
         # Print IK timing

@@ -133,9 +133,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--detector_name",
-        default="vitdet",
+        default="",
         type=str,
-        help="Human detection model for demo (Default `vitdet`, add your favorite detector if needed).",
+        help="Human detection model for demo (optional: `vitdet` or `sam3`).",
     )
     parser.add_argument(
         "--segmentor_name",
@@ -145,9 +145,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fov_name",
-        default="moge2",
+        default="",
         type=str,
-        help="FOV estimation model for demo (Default `moge2`, add your favorite fov estimator if needed).",
+        help="FOV estimation model for demo (optional: `moge2`).",
     )
     parser.add_argument(
         "--detector_path",
